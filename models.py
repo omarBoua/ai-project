@@ -96,12 +96,23 @@ class GraphPredictionModel(MyPredictionModel, nn.Module):
         predicted_adjacency = (probabilities > threshold).float()
 
         res = Graph()
+        connected_parts = set()
 
         num_parts = len(parts)
         for i in range(num_parts):
             for j in range(i + 1, num_parts):
                 if predicted_adjacency[i][j]:  # If an edge exists
                     res.add_undirected_edge(parts[i], parts[j])
+                    connected_parts.add(parts[i])
+                    connected_parts.add(parts[j])
+
+        while len(connected_parts) < len(parts):
+            for i in range(num_parts):
+                if parts[i] not in connected_parts:
+                    max_prob_index = torch.argmax(probabilities[i]).item()
+                    res.add_undirected_edge(parts[i], parts[max_prob_index])
+                    connected_parts.add(parts[i])
+                    connected_parts.add(parts[max_prob_index])
 
         return res
 
@@ -147,6 +158,8 @@ class EdgePredictionModel(MyPredictionModel, nn.Module):
         model.eval()
         n = len(parts)
         graph = Graph()
+        connected_parts = set()
+        max_probabilities = {}
 
         for i in range(n):
             for j in range(i + 1, n):
@@ -159,10 +172,29 @@ class EdgePredictionModel(MyPredictionModel, nn.Module):
                 fj = torch.tensor([fam_j], dtype=torch.long)
 
                 logit = model(pi, fi, pj, fj)
-                prob = torch.sigmoid(logit)
-                if prob.item() > threshold:
+                prob = torch.sigmoid(logit).item()
+
+                if prob > threshold:
                     graph.add_edge(parts[i], parts[j])
                     graph.add_edge(parts[j], parts[i])
+                    connected_parts.add(parts[i])
+                    connected_parts.add(parts[j])
+
+                # Store the most likely connection regardless of threshold
+                if parts[i] not in max_probabilities or prob > max_probabilities[parts[i]][1]:
+                    max_probabilities[parts[i]] = (parts[j], prob)
+                if parts[j] not in max_probabilities or prob > max_probabilities[parts[j]][1]:
+                    max_probabilities[parts[j]] = (parts[i], prob)
+
+        # Add unmatched parts to their most likely connection (without checking threshold)
+        while len(connected_parts) < len(parts):
+            for part in parts:
+                if part not in connected_parts and part in max_probabilities:
+                    best_match, _ = max_probabilities[part]
+                    graph.add_edge(part, best_match)
+                    graph.add_edge(best_match, part)
+                    connected_parts.add(part)
+                    connected_parts.add(best_match)
 
         return graph
 

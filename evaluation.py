@@ -21,7 +21,7 @@ def load_model(file_path: str) -> MyPredictionModel:
         :param file_path: path to file
         :return: the loaded prediction model
     """
-    if 'EdgePredictor' in file_path:
+    if 'edge_predictor' in file_path:
         loaded_model = EdgePredictionModel(part_vocab_size=2271, family_vocab_size=96)
 
         # Load model to CPU to avoid CUDA-related issues
@@ -276,7 +276,7 @@ if __name__ == '__main__':
 
     # Load the final model
 
-    model_file_path = 'model_EdgePredictor.pth'
+    model_file_path = 'edge_predictor_model.pth'
     prediction_model: MyPredictionModel = load_model(model_file_path)
 
     # For illustration, we compute the eval score on a portion of the training data
