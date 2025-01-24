@@ -272,26 +272,25 @@ Several challenges were faced during implementation:
    - The model exhibited a tendency to memorize training graphs due to high feature dimensionality.  
    - Solution: Introduced dropout layers and data augmentation techniques.  
 
-
 ### 5. Results and Analysis
 
 This section presents the evaluation results of the two models: **Edge Prediction Model** and **Graph Prediction Model**, based on performance metrics computed on a test set of 500 graphs.
 
 ---
 
-#### Threshold Selection and Post-Processing Strategy
+#### Threshold Selection and Edge Correction Strategy
 
-In both models, a **threshold value of 0.1** was used to determine the presence of edges in the predicted adjacency matrices. The threshold selection played a critical role in balancing performance across multiple evaluation metrics.  
+In both models, a **threshold value of 0.1** was used to determine the presence of edges in the predicted adjacency matrices. However, to address the issue of generating graphs with fewer parts, an additional correction mechanism was introduced. This mechanism adds edges between nodes that are most likely connected, even if their predicted probability falls below the threshold. This adjustment ensures that incomplete graphs are minimized while maintaining good performance across key metrics.
 
-**Post-processing Adjustment:**  
-- In cases where the predicted graph failed (e.g., missing nodes due to low-confidence edge predictions), a **post-processing step** was introduced to add edges for nodes that were most likely connected, even if their edge scores were below the set threshold.  
-- This adjustment was necessary to avoid producing incomplete graphs that do not make sense in real-world applications.
-- The threshold value of **0.1** was carefully chosen to minimize the need for this post-processing while maintaining high precision, recall, and overall accuracy.
+- **Objective of Threshold Selection:**  
+  The threshold is chosen to strike a balance between minimizing the number of corrections and maintaining good overall performance metrics.
 
-**Trade-offs Considered:**  
-- Setting a **lower threshold** could eliminate the need for edge additions but would introduce excessive false positives, degrading precision.  
-- Conversely, setting a **higher threshold** could lead to an increase in missing connections, requiring more post-processing and increasing graph edit distances.  
-- The current approach achieves a balance between reducing the number of modifications and preserving good performance metrics.
+- **Threshold Trade-off Considerations:**  
+  - Setting the threshold too **low** would result in nearly zero corrections, but might introduce many false positive edges, reducing precision.  
+  - Setting the threshold too **high** would limit corrections but could lead to disconnected graphs.  
+  - The current threshold minimizes corrections while ensuring high precision and accuracy.
+
+The models were evaluated based on the number of graphs requiring correction and their overall performance.
 
 ---
 
@@ -320,10 +319,10 @@ The models were evaluated using the following metrics:
 
 #### Model Performance Comparison
 
-The evaluation results for both models after incorporating the post-processing adjustment are summarized below:
+The evaluation results for both models are summarized below:
 
 ##### **Edge Prediction Model (Simple Neural Network)**
-- **Number of invalid graphs (edges added):** 5  
+- **Number of corrected graphs:** 5 (edges below the threshold were added)
 - **Precision:** 0.8797  
 - **Recall:** 1.0000  
 - **F1-score:** 0.9299  
@@ -335,49 +334,51 @@ The evaluation results for both models after incorporating the post-processing a
 ---
 
 ##### **Graph Prediction Model (Graph Neural Network)**
-- **Number of invalid graphs (edges added):** 2  
-- **Precision:** 0.8797  
-- **Recall:** 1.0000  
-- **F1-score:** 0.9299  
-- **Hamming Distance:** 1.4160  
-- **Jaccard Similarity:** 0.8797  
-- **Graph Edit Distance:** 1.4160  
-- **Edge Accuracy:** 96.4443%  
+- **Number of corrected graphs:** 2 (edges below the threshold were added)
+- **Precision:** 0.8622  
+- **Recall:** 0.9993  
+- **F1-score:** 0.9185  
+- **Hamming Distance:** 1.6391  
+- **Jaccard Similarity:** 0.8618  
+- **Graph Edit Distance:** 1.6299  
+- **Edge Accuracy:** 95.72%  
 
 ---
 
 #### Key Observations
 
-1. **Impact of Post-processing:**  
-   - The post-processing step of adding edges for missing nodes successfully reduced the number of invalid graphs, ensuring no critical components were omitted.  
-   - Both models now achieve **identical performance metrics**, indicating that the GNN model required fewer edge additions (2) compared to the simpler model (5).
+1. **Threshold Effect on Corrected Graphs:**  
+   - The threshold of 0.1, combined with the edge correction mechanism, resulted in only **5 corrections** for the Edge Prediction Model and **2 corrections** for the Graph Prediction Model.  
+   - This approach helps retain a high level of precision and accuracy while minimizing the occurrence of disconnected graphs.
 
 2. **Prediction Quality:**  
-   - Both models achieved high recall (1.0000), ensuring all correct edges were eventually included after adjustments.  
-   - The precision (0.8797) remained stable, indicating that the added edges were chosen effectively without significantly increasing false positives.
+   - The **Edge Prediction Model** achieves a higher precision (0.8797 vs. 0.8622) and F1-score (0.9299 vs. 0.9185), indicating better edge classification capability.  
+   - Both models have nearly perfect recall, meaning they successfully identify all actual edges.
 
 3. **Structural Accuracy:**  
-   - The Hamming and Graph Edit distances decreased slightly due to the improved post-processing strategy, indicating better structural similarity to the ground truth graphs.
+   - The **Graph Prediction Model** results in a slightly higher Hamming distance (1.6391 vs. 1.4160) and Graph Edit Distance (1.6299 vs. 1.4160), indicating more discrepancies in the predicted structures compared to the target graphs.  
 
 4. **Generalization Performance:**  
-   - The **Graph Prediction Model** required fewer modifications to generate valid graphs, demonstrating its capability to generalize structural relationships better than the Edge Prediction Model.
+   - The **Graph Prediction Model** required fewer corrections (2 vs. 5), suggesting better generalization across diverse graph structures.  
+   - The lower precision in the GNN model suggests it might be generating additional edges, potentially overfitting to local structures.
 
 5. **Edge Accuracy:**  
-   - Both models now achieve the same edge accuracy (96.44%), which is a significant improvement compared to the initial experiments.
+   - The **Edge Prediction Model** has slightly higher edge accuracy (96.44% vs. 95.72%), meaning it predicts individual edges more accurately.  
+   - However, the difference is marginal and should be weighed against other metrics.
 
 ---
 
 #### Conclusion from Results
 
 - **When to Choose the Edge Prediction Model:**  
-  - If a simpler and faster approach is preferred.  
-  - Suitable when edge-level classification accuracy is more important than overall graph structure.  
-  - Potential downside: More post-processing may be required to avoid failed graphs.
+  - If higher precision and F1-score are the priorities.  
+  - Suitable for applications where predicting the correct edges is more critical than global graph structure.  
+  - Potential downside: More graphs required corrections, suggesting potential limitations in handling complex graphs.
 
 - **When to Choose the Graph Prediction Model:**  
-  - If the focus is on capturing complex structural relationships.  
-  - More robust with fewer modifications needed.  
-  - Potential downside: Longer training times and higher computational requirements.
+  - If structural consistency is a key concern.  
+  - Better suited for applications where maintaining overall graph topology is important.  
+  - Potential downside: Slightly lower precision and edge accuracy.
 
 ### 6. Conclusion
 

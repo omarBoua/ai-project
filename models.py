@@ -107,6 +107,7 @@ class GraphPredictionModel(MyPredictionModel, nn.Module):
                     connected_parts.add(parts[j])
 
         while len(connected_parts) < len(parts):
+            print('oups')
             for i in range(num_parts):
                 if parts[i] not in connected_parts:
                     max_prob_index = torch.argmax(probabilities[i]).item()
