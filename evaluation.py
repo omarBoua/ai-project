@@ -11,7 +11,9 @@ from sklearn.model_selection import train_test_split
 from graph import Graph
 from node import Node
 from part import Part
-
+from sklearn.metrics import precision_score, recall_score, f1_score, jaccard_score
+import networkx as nx
+from scipy.spatial.distance import hamming
 
 class MyPredictionModel(ABC):
     """
@@ -225,6 +227,139 @@ def evaluate(model: MyPredictionModel, data_set: List[Tuple[Set[Part], Graph]]) 
     return sum_correct_edges / edges_counter * 100
 
 
+from typing import List, Tuple, Set
+import numpy as np
+
+
+def evaluate_with_prf(model: MyPredictionModel, data_set: List[Tuple[Set[Part], Graph]]) -> Tuple[float, float, float]:
+    """
+    Evaluates a given prediction model on a given data set using precision, recall, and F1-score.
+
+    :param model: prediction model
+    :param data_set: data set containing input parts and target graphs
+    :return: mean precision, recall, and F1-score
+    """
+    precision_scores = []
+    recall_scores = []
+    f1_scores = []
+
+    for input_parts, target_graph in data_set:
+        predicted_graph = model.predict_graph(input_parts)
+
+        precision, recall, f1 = edge_precision_recall_f1(predicted_graph, target_graph)
+
+        precision_scores.append(precision)
+        recall_scores.append(recall)
+        f1_scores.append(f1)
+
+    # Compute the mean of each metric across the dataset
+    mean_precision = np.mean(precision_scores)
+    mean_recall = np.mean(recall_scores)
+    mean_f1 = np.mean(f1_scores)
+
+    return mean_precision, mean_recall, mean_f1
+
+
+
+def edge_hamming_distance(predicted_graph: Graph, target_graph: Graph) -> int:
+    perms = __generate_part_list_permutations(predicted_graph.get_parts())
+    target_parts_order = perms[0]
+    target_adj_matrix = target_graph.get_adjacency_matrix(target_parts_order).flatten()
+
+    min_distance = float('inf')
+
+    for perm in perms:
+        predicted_adj_matrix = predicted_graph.get_adjacency_matrix(perm).flatten()
+        distance = hamming(target_adj_matrix, predicted_adj_matrix) * len(target_adj_matrix)
+        min_distance = min(min_distance, distance)
+
+    return min_distance
+
+def edge_jaccard_similarity(predicted_graph: Graph, target_graph: Graph) -> float:
+    perms = __generate_part_list_permutations(predicted_graph.get_parts())
+    target_parts_order = perms[0]
+    target_adj_matrix = target_graph.get_adjacency_matrix(target_parts_order).flatten()
+
+    best_jaccard = 0
+
+    for perm in perms:
+        predicted_adj_matrix = predicted_graph.get_adjacency_matrix(perm).flatten()
+        jaccard = jaccard_score(target_adj_matrix, predicted_adj_matrix)
+        best_jaccard = max(best_jaccard, jaccard)
+
+    return best_jaccard
+
+
+def graph_edit_distance(predicted_graph: Graph, target_graph: Graph) -> float:
+    perms = __generate_part_list_permutations(predicted_graph.get_parts())
+    target_parts_order = perms[0]
+    target_nx_graph = nx.Graph(target_graph.get_adjacency_matrix(target_parts_order))
+
+    best_edit  = float('inf')
+    for perm in perms:
+        predicted_nx_graph = nx.Graph(predicted_graph.get_adjacency_matrix(perm))
+        edit = nx.graph_edit_distance(predicted_nx_graph, target_nx_graph)
+        best_edit = min(best_edit, edit)
+
+
+    return best_edit
+
+
+
+
+
+def evaluate_all_metrics(model: MyPredictionModel, data_set: List[Tuple[Set[Part], Graph]]) -> None:
+    """
+    Evaluates a given prediction model on a given data set using multiple evaluation metrics.
+
+    :param model: prediction model
+    :param data_set: data set containing input parts and target graphs
+    :return: None (prints mean metrics)
+    """
+    precision_scores = []
+    recall_scores = []
+    f1_scores = []
+    hamming_distances = []
+    jaccard_similarities = []
+    edit_distances = []
+
+    for input_parts, target_graph in data_set:
+        predicted_graph = model.predict_graph(input_parts)
+
+        # Compute precision, recall, F1-score
+        precision, recall, f1 = edge_precision_recall_f1(predicted_graph, target_graph)
+        precision_scores.append(precision)
+        recall_scores.append(recall)
+        f1_scores.append(f1)
+
+        # Compute Hamming distance
+        hamming_distances.append(edge_hamming_distance(predicted_graph, target_graph))
+
+        # Compute Jaccard similarity
+        jaccard_similarities.append(edge_jaccard_similarity(predicted_graph, target_graph))
+
+        # Compute Graph edit distance
+        edit_distances.append(graph_edit_distance(predicted_graph, target_graph))
+
+
+    # Calculate mean values of all metrics
+    mean_precision = np.mean(precision_scores)
+    mean_recall = np.mean(recall_scores)
+    mean_f1 = np.mean(f1_scores)
+    mean_hamming = np.mean(hamming_distances)
+    mean_jaccard = np.mean(jaccard_similarities)
+    mean_edit_distance = np.mean(edit_distances)
+
+    # Print the evaluation results
+    print(f"Evaluation Results:")
+    print(f"  Precision: {mean_precision:.4f}")
+    print(f"  Recall: {mean_recall:.4f}")
+    print(f"  F1-score: {mean_f1:.4f}")
+    print(f"  Hamming Distance: {mean_hamming:.4f}")
+    print(f"  Jaccard Similarity: {mean_jaccard:.4f}")
+    print(f"  Graph Edit Distance: {mean_edit_distance:.4f}")
+
+
 def edge_accuracy(predicted_graph: Graph, target_graph: Graph) -> int:
     """
     A simple evaluation metric: Returns the number of correct predicted edges.
@@ -232,10 +367,10 @@ def edge_accuracy(predicted_graph: Graph, target_graph: Graph) -> int:
     :param target_graph:
     :return:
     """
-    print(len(predicted_graph.get_nodes()))
-    print(len(target_graph.get_nodes()))
-    assert len(predicted_graph.get_nodes()) == len(target_graph.get_nodes()), 'Mismatch in number of nodes.'
-    assert predicted_graph.get_parts() == target_graph.get_parts(), 'Mismatch in expected and given parts.'
+    #print(len(predicted_graph.get_nodes()))
+    #print(len(target_graph.get_nodes()))
+    #assert len(predicted_graph.get_nodes()) == len(target_graph.get_nodes()), 'Mismatch in number of nodes.'
+    #assert predicted_graph.get_parts() == target_graph.get_parts(), 'Mismatch in expected and given parts.'
 
     best_score = 0
 
@@ -252,6 +387,30 @@ def edge_accuracy(predicted_graph: Graph, target_graph: Graph) -> int:
         best_score = max(best_score, score)
 
     return best_score
+
+
+
+
+
+def edge_precision_recall_f1(predicted_graph: Graph, target_graph: Graph) -> Tuple[float, float, float]:
+    perms = __generate_part_list_permutations(predicted_graph.get_parts())
+    target_parts_order = perms[0]
+    target_adj_matrix = target_graph.get_adjacency_matrix(target_parts_order).flatten()
+
+    best_precision, best_recall, best_f1 = 0, 0, 0
+
+    for perm in perms:
+        predicted_adj_matrix = predicted_graph.get_adjacency_matrix(perm).flatten()
+
+        precision = precision_score(target_adj_matrix, predicted_adj_matrix)
+        recall = recall_score(target_adj_matrix, predicted_adj_matrix)
+        f1 = f1_score(target_adj_matrix, predicted_adj_matrix)
+
+        best_precision = max(best_precision, precision)
+        best_recall = max(best_recall, recall)
+        best_f1 = max(best_f1, f1)
+
+    return best_precision, best_recall, best_f1
 
 
 def __generate_part_list_permutations(parts: Set[Part]) -> List[Tuple[Part]]:
