@@ -1,180 +1,18 @@
-from abc import ABC, abstractmethod
-from itertools import permutations
-import numpy as np
 import pickle
+from itertools import permutations
 from typing import Dict, List, Set, Tuple
+
+import networkx as nx
+import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from scipy.spatial.distance import hamming
+from sklearn.metrics import precision_score, recall_score, f1_score, jaccard_score
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 from graph import Graph
-from node import Node
+from models import MyPredictionModel, GraphPredictionModel, EdgePredictionModel
 from part import Part
-from sklearn.metrics import precision_score, recall_score, f1_score, jaccard_score
-import networkx as nx
-from scipy.spatial.distance import hamming
-
-class MyPredictionModel(ABC):
-    """
-    This class is a blueprint for your prediction model(s) serving as base class.
-    """
-
-    @abstractmethod
-    def predict_graph(self, parts: Set[Part]) -> Graph:
-        """
-        Returns a graph containing all given parts. This method is called within the method `evaluate()`.
-        :param parts: set of parts to form up an assembly (i.e. a graph)
-        :return: graph
-        """
-        # TODO: implement this method
-        ...
-
-class OmarPredictionModel(MyPredictionModel, nn.Module):
-    def __init__(self, part_vocab_size, family_vocab_size, embed_dim=1, gnn_hidden_dim=32):
-        super().__init__()
-        self.part_embedding = nn.Embedding(part_vocab_size, embed_dim)
-        self.family_embedding = nn.Embedding(family_vocab_size, embed_dim)
-        self.gnn_hidden_dim = gnn_hidden_dim
-
-        # MLP for initial node features
-        self.node_mlp = nn.Sequential(
-            nn.Linear(embed_dim * 2, gnn_hidden_dim),
-            nn.ReLU()
-        )
-
-        # Suppose we do 1 GNN layer or skip directly for brevity:
-        self.gnn1 = nn.Linear(gnn_hidden_dim, gnn_hidden_dim)
-
-        # Bilinear scoring matrix
-        self.bilinear = nn.Parameter(torch.randn(gnn_hidden_dim, gnn_hidden_dim))
-        # Or define it as nn.Linear(gnn_hidden_dim, gnn_hidden_dim, bias=False)
-
-    def forward(self, part_ids, family_ids):
-        # Node feature initialization
-        part_emb = self.part_embedding(part_ids)          # (N, embed_dim)
-        family_emb = self.family_embedding(family_ids)    # (N, embed_dim)
-        node_features = torch.cat([part_emb, family_emb], dim=1)  # (N, 2*embed_dim)
-        node_features = self.node_mlp(node_features)      # (N, gnn_hidden_dim)
-
-        # Example GNN step (if you want)
-        node_features = F.relu(self.gnn1(node_features))
-
-        # Now do a bilinear form: (N,D) x (D,D) x (D,N) => (N,N)
-        # 1) transform node_features: (N, D) -> (N, D) with W
-        transformed = node_features @ self.bilinear       # (N, D)
-
-        # 2) multiply by node_features^T => (N, N)
-        # final scores = (N, D) @ (D, N) = (N, N)
-        edge_logits = transformed @ node_features.transpose(0,1)
-
-        return edge_logits  # raw logits, shape (N, N)
-
-    @torch.no_grad()
-    def __createGraph(self, model, parts, threshold=0.005) -> Graph:
-        """
-        Evaluate the model on a single graph.
-
-        Args:
-            model: Trained model.
-            graph: Graph object to evaluate.
-            threshold: Threshold for classifying edges (default: 0.5).
-
-        Returns:
-            dict: Dictionary containing accuracy, precision, recall, and F1-score.
-        """
-        # Get sorted part IDs and family IDs
-        parts = sorted(
-            list(parts),
-            key=lambda part: (part.get_part_id(), part.get_family_id())
-        )
-
-        # Move tensors to the same device as the model
-        part_ids = torch.tensor([int(part.get_part_id()) for part in parts], dtype=torch.long)
-        family_ids = torch.tensor([int(part.get_family_id()) for part in parts], dtype=torch.long)
-
-        # Get sorted part order and true adjacency matrix
-        part_order = tuple(part for part in parts)
-
-        # Predict adjacency matrix
-        logits = model(part_ids, family_ids)
-        probabilities = torch.sigmoid(logits)
-        predicted_adjacency = (probabilities > threshold).float()
-
-        res = Graph()
-
-        print(probabilities)
-
-        num_parts = len(parts)
-        for i in range(num_parts):
-            for j in range(i + 1, num_parts):
-                if predicted_adjacency[i][j]:  # If an edge exists
-                    res.add_undirected_edge(parts[i], parts[j])
-
-        return res
-
-    def predict_graph(self, parts: Set[Part]) -> Graph:
-        return self.__createGraph(self, parts)
-
-class EdgePredictor(MyPredictionModel, nn.Module):
-    def __init__(self, part_vocab_size, family_vocab_size,
-                 embed_dim=16, hidden_dim=32):
-        super().__init__()
-        self.part_embedding = nn.Embedding(part_vocab_size, embed_dim)
-        self.family_embedding = nn.Embedding(family_vocab_size, embed_dim)
-        self.fc1 = nn.Linear(embed_dim * 4, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 1)
-        self.relu = nn.ReLU()
-
-    def forward(self, part_i, fam_i, part_j, fam_j):
-        """
-        part_i, fam_i, part_j, fam_j are integer tensors
-        of shape (batch_size,).
-        """
-        pi = self.part_embedding(part_i)  # (B, embed_dim)
-        fi = self.family_embedding(fam_i) # (B, embed_dim)
-        pj = self.part_embedding(part_j)  # (B, embed_dim)
-        fj = self.family_embedding(fam_j) # (B, embed_dim)
-
-        x = torch.cat([pi, fi, pj, fj], dim=1)  # (B, 4*embed_dim)
-        x = self.relu(self.fc1(x))             # (B, hidden_dim)
-        x = self.fc2(x)                        # (B, 1)
-        return x.squeeze(1)  # (B,)
-
-    @torch.no_grad()
-    def __predict_edges(self, model, parts, threshold=0.001):
-        """
-        part_family_list: list of (part_id, family_id)
-        We will return a list of edges (i, j) for i < j if predicted prob > threshold.
-        """
-        parts = sorted(
-            list(parts),
-            key=lambda part: (part.get_part_id(), part.get_family_id())
-        )
-        model.eval()
-        n = len(parts)
-        graph = Graph()
-
-        for i in range(n):
-            for j in range(i + 1, n):
-                part_i, fam_i = int(parts[i].get_part_id()), int(parts[i].get_family_id())
-                part_j, fam_j = int(parts[j].get_part_id()), int(parts[j].get_family_id())
-
-                pi = torch.tensor([part_i], dtype=torch.long)
-                fi = torch.tensor([fam_i], dtype=torch.long)
-                pj = torch.tensor([part_j], dtype=torch.long)
-                fj = torch.tensor([fam_j], dtype=torch.long)
-
-                logit = model(pi, fi, pj, fj)
-                prob = torch.sigmoid(logit)
-                if prob.item() > threshold:
-                    graph.add_edge(parts[i], parts[j])
-                    graph.add_edge(parts[j], parts[i])
-
-        return graph
-
-    def predict_graph(self, parts: Set[Part]) -> Graph:
-        return self.__predict_edges(self, parts)
 
 
 def load_model(file_path: str) -> MyPredictionModel:
@@ -184,7 +22,7 @@ def load_model(file_path: str) -> MyPredictionModel:
         :return: the loaded prediction model
     """
     if 'EdgePredictor' in file_path:
-        loaded_model = EdgePredictor(part_vocab_size=2271, family_vocab_size=96)
+        loaded_model = EdgePredictionModel(part_vocab_size=2271, family_vocab_size=96)
 
         # Load model to CPU to avoid CUDA-related issues
         loaded_model.load_state_dict(torch.load(file_path, map_location=torch.device('cpu')))
@@ -194,7 +32,7 @@ def load_model(file_path: str) -> MyPredictionModel:
         return loaded_model
 
     else:
-        loaded_model = OmarPredictionModel(part_vocab_size=2271, family_vocab_size=96, embed_dim=1, gnn_hidden_dim=32)
+        loaded_model = GraphPredictionModel(part_vocab_size=2271, family_vocab_size=96, embed_dim=1, gnn_hidden_dim=32)
 
         # Load model to CPU to avoid CUDA-related issues
         loaded_model.load_state_dict(torch.load(file_path, map_location=torch.device('cpu')))
@@ -227,40 +65,6 @@ def evaluate(model: MyPredictionModel, data_set: List[Tuple[Set[Part], Graph]]) 
     return sum_correct_edges / edges_counter * 100
 
 
-from typing import List, Tuple, Set
-import numpy as np
-
-
-def evaluate_with_prf(model: MyPredictionModel, data_set: List[Tuple[Set[Part], Graph]]) -> Tuple[float, float, float]:
-    """
-    Evaluates a given prediction model on a given data set using precision, recall, and F1-score.
-
-    :param model: prediction model
-    :param data_set: data set containing input parts and target graphs
-    :return: mean precision, recall, and F1-score
-    """
-    precision_scores = []
-    recall_scores = []
-    f1_scores = []
-
-    for input_parts, target_graph in data_set:
-        predicted_graph = model.predict_graph(input_parts)
-
-        precision, recall, f1 = edge_precision_recall_f1(predicted_graph, target_graph)
-
-        precision_scores.append(precision)
-        recall_scores.append(recall)
-        f1_scores.append(f1)
-
-    # Compute the mean of each metric across the dataset
-    mean_precision = np.mean(precision_scores)
-    mean_recall = np.mean(recall_scores)
-    mean_f1 = np.mean(f1_scores)
-
-    return mean_precision, mean_recall, mean_f1
-
-
-
 def edge_hamming_distance(predicted_graph: Graph, target_graph: Graph) -> int:
     perms = __generate_part_list_permutations(predicted_graph.get_parts())
     target_parts_order = perms[0]
@@ -273,7 +77,9 @@ def edge_hamming_distance(predicted_graph: Graph, target_graph: Graph) -> int:
         distance = hamming(target_adj_matrix, predicted_adj_matrix) * len(target_adj_matrix)
         min_distance = min(min_distance, distance)
 
-    return min_distance
+    # Divide by 2 since the adjacency matrix is symmetric
+    return min_distance / 2
+
 
 def edge_jaccard_similarity(predicted_graph: Graph, target_graph: Graph) -> float:
     perms = __generate_part_list_permutations(predicted_graph.get_parts())
@@ -295,17 +101,13 @@ def graph_edit_distance(predicted_graph: Graph, target_graph: Graph) -> float:
     target_parts_order = perms[0]
     target_nx_graph = nx.Graph(target_graph.get_adjacency_matrix(target_parts_order))
 
-    best_edit  = float('inf')
+    best_edit = float('inf')
     for perm in perms:
         predicted_nx_graph = nx.Graph(predicted_graph.get_adjacency_matrix(perm))
         edit = nx.graph_edit_distance(predicted_nx_graph, target_nx_graph)
         best_edit = min(best_edit, edit)
 
-
     return best_edit
-
-
-
 
 
 def evaluate_all_metrics(model: MyPredictionModel, data_set: List[Tuple[Set[Part], Graph]]) -> None:
@@ -322,9 +124,16 @@ def evaluate_all_metrics(model: MyPredictionModel, data_set: List[Tuple[Set[Part
     hamming_distances = []
     jaccard_similarities = []
     edit_distances = []
+    edge_accuracies = []
+    failed_graphs = 0
 
-    for input_parts, target_graph in data_set:
+    progress_bar = tqdm(data_set, desc="Processing graphs", unit="graph", dynamic_ncols=True)
+
+    for input_parts, target_graph in progress_bar:
         predicted_graph = model.predict_graph(input_parts)
+        if len(predicted_graph.get_nodes()) != len(target_graph.get_nodes()):
+            failed_graphs += 1
+            continue
 
         # Compute precision, recall, F1-score
         precision, recall, f1 = edge_precision_recall_f1(predicted_graph, target_graph)
@@ -341,23 +150,40 @@ def evaluate_all_metrics(model: MyPredictionModel, data_set: List[Tuple[Set[Part
         # Compute Graph edit distance
         edit_distances.append(graph_edit_distance(predicted_graph, target_graph))
 
+        # Edge accuracy
+        edge_accuracies.append(edge_accuracy(predicted_graph, target_graph) / (len(input_parts) * len(input_parts)))
 
-    # Calculate mean values of all metrics
+        # Update tqdm progress bar with current mean values
+        progress_bar.set_postfix({
+            "failed": f"{failed_graphs}",
+            "P": f"{np.mean(precision_scores):.4f}",
+            "R": f"{np.mean(recall_scores):.4f}",
+            "F1": f"{np.mean(f1_scores):.4f}",
+            "Hamming": f"{np.mean(hamming_distances):.4f}",
+            "Jaccard": f"{np.mean(jaccard_similarities):.4f}",
+            "Edit Dist": f"{np.mean(edit_distances):.4f}",
+            "Acc": f"{100 * np.mean(edge_accuracies):.2f}%",
+        })
+
+    # Calculate final mean values
     mean_precision = np.mean(precision_scores)
     mean_recall = np.mean(recall_scores)
     mean_f1 = np.mean(f1_scores)
     mean_hamming = np.mean(hamming_distances)
     mean_jaccard = np.mean(jaccard_similarities)
     mean_edit_distance = np.mean(edit_distances)
+    edge_accuracy_value = 100 * np.mean(edge_accuracies)
 
     # Print the evaluation results
-    print(f"Evaluation Results:")
+    print("\nEvaluation Results:")
+    print(f"  Number of invalid graphs due to mismatch in number of nodes: {failed_graphs}")
     print(f"  Precision: {mean_precision:.4f}")
     print(f"  Recall: {mean_recall:.4f}")
     print(f"  F1-score: {mean_f1:.4f}")
     print(f"  Hamming Distance: {mean_hamming:.4f}")
     print(f"  Jaccard Similarity: {mean_jaccard:.4f}")
     print(f"  Graph Edit Distance: {mean_edit_distance:.4f}")
+    print(f"  Edge Accuracy: {edge_accuracy_value:.4f}%")
 
 
 def edge_accuracy(predicted_graph: Graph, target_graph: Graph) -> int:
@@ -367,10 +193,8 @@ def edge_accuracy(predicted_graph: Graph, target_graph: Graph) -> int:
     :param target_graph:
     :return:
     """
-    #print(len(predicted_graph.get_nodes()))
-    #print(len(target_graph.get_nodes()))
-    #assert len(predicted_graph.get_nodes()) == len(target_graph.get_nodes()), 'Mismatch in number of nodes.'
-    #assert predicted_graph.get_parts() == target_graph.get_parts(), 'Mismatch in expected and given parts.'
+    assert len(predicted_graph.get_nodes()) == len(target_graph.get_nodes()), 'Mismatch in number of nodes.'
+    assert predicted_graph.get_parts() == target_graph.get_parts(), 'Mismatch in expected and given parts.'
 
     best_score = 0
 
@@ -387,9 +211,6 @@ def edge_accuracy(predicted_graph: Graph, target_graph: Graph) -> int:
         best_score = max(best_score, score)
 
     return best_score
-
-
-
 
 
 def edge_precision_recall_f1(predicted_graph: Graph, target_graph: Graph) -> Tuple[float, float, float]:
