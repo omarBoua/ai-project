@@ -159,6 +159,8 @@ The model comprises:
 - **Evaluation Metrics:** Precision, Recall, F1-score, Hamming Distance, Graph Edit Distance.
 - **Visualization of training process:** We Observe the train/val losses over epochs. The training loss decreases and the validation loss is slightly higher than training loss, which suggests adequate model capacity and good generalization.
 ![img.png](train_val_loss_graph_predictor.png)
+
+
 **Strengths and Limitations:**  
 
 *Strengths:*  
