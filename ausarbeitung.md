@@ -31,9 +31,10 @@ The models were trained and evaluated using custom evaluation metrics designed t
 ## Data Source
 The dataset used in this project consists of assembly graphs representing relationships between different parts in an assembly process. The data is stored in a serialized format (`graphs.dat`), which contains a collection of graph objects. Each graph comprises nodes representing parts and edges representing relationships between those parts.
 
-The dataset was split into:
+The dataset was split (80-10-10) into:
 - **Training Set:** 80% of the data.
-- **Test Set:** 20% of the data.
+- **Validation Set:** 10% of the data.
+- **Test Set:** 10% of the data.
   
 The split was performed using the `train_test_split` function from `sklearn` with a fixed random state for reproducibility.
 
